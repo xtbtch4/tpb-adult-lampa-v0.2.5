@@ -1,18 +1,24 @@
 /*
  * TPB Adult -> Lampa bridge
- * Version: 0.2.6
+ * Version: 0.2.7
+ *
+ * Based on working v0.2.0
  *
  * Fixes:
- * - correct InteractionCategory lifecycle
+ * - keeps all 6 TPB configurations
+ * - keeps TPB Adult in sidebar menu
+ * - keeps InteractionCategory lifecycle
  * - no manual comp.start()/comp.create() recursion
  * - correct activity loader access
- * - vertical catalog scrolling/focus is left to Lampa InteractionCategory
- * - real pagination
- * - meta/stream requests use the same configured base as the catalog
- * - no single-item playlist reset when starting a stream
- * - all 6 configured TPB bases are preserved
- * - old Lampa.Storage URL no longer overrides all 6 bases
- * - catalog request diagnostics added
+ * - vertical catalog scrolling is handled by Lampa
+ * - catalog pagination uses ONLY Stremio `skip`
+ * - NO `limit` parameter is sent to TPB
+ * - NO `maxResults` parameter is sent to TPB
+ * - each catalog uses its own TPB base
+ * - only first 20 received metas are passed to Lampa
+ * - next pages use skip=20, skip=40, skip=60...
+ * - meta/stream requests use the same base as the catalog
+ * - no playlist reset when starting a stream
  *
  * ES5, no external dependencies.
  */
@@ -21,17 +27,27 @@
     'use strict';
 
     var PLUGIN_ID = 'tpb_adult_lampa';
+    var VERSION = '0.2.7';
+
+    /*
+     * =========================================================
+     * SIX TPB CONFIGURATIONS
+     * =========================================================
+     *
+     * IMPORTANT:
+     * These URLs are preserved exactly from working v0.2.0.
+     */
 
     var DEFAULT_BASE = [
-        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsicG9ybnJpcHMiLCJoZW50YWkiLCJwamF2Iiwic3RyaXBjaGF0IiwieWVzcG9ybiIsInBvcm53ZXgiXSwidGJLZXkiOiJhNWVjZmJiZC1mNDRlLTQ3MWUtODA0MC1iYWY4MWRmYzQyODIiLCJkaXNhYmxlZENhdGFsb2dzIjpbInNjX2d1cyIsInNjX3RyYW5zIiwic2NfdXNhIiwic2Nfc291dGhfbWVyaWNhIiwic2NfZXVyb3BlIiwic2NfYXNpYSIsInNjX2luZGlhIiwic2Nfb2NlYW5pYSJdLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjEsImdyb3VwVG90YWwiOjZ9',
+        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56YmdlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsicG9ybnJpcHMiLCJoZW50YWkiLCJwamF2Iiwic3RyaXBjaGF0IiwieWVzcG9ybiIsInBvcm53ZXgiXSwidGJLZXkiOiJhNWVjZmJiZC1mNDRlLTQ3MWUtODA0MC1iYWY4MWRmYzQyODIiLCJkaXNhYmxlZENhdGFsb2dzIjpbInNjX2d1cyIsInNjX3RyYW5zIiwic2NfdXNhIiwic2Nfc291dGhfbWVyaWNhIiwic2NfZXVyb3BlIiwic2NfYXNpYSIsInNjX2luZGlhIiwic2Nfb2NlYW5pYSJdLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjEsImdyb3VwVG90YWwiOjZ9',
 
-        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsicGltcGJ1bm55Iiwia29yZWFuYmoiLCJ4aGFtc3RlciIsImhkcG9ybmdnIiwicG9ybnRyZXgiLCJmcmVzaHBvcm5vIiwiYmluZ2F0byJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDA0MC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjIsImdyb3VwVG90YWwiOjZ9',
+        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56YmdlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsicGltcGJ1bm55Iiwia29yZWFuYmoiLCJ4aGFtc3RlciIsImhkcG9ybmdnIiwicG9ybnRyZXgiLCJmcmVzaHBvcm5vIiwiYmluZ2F0byJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDA0MC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjIsImdyb3VwVG90YWwiOjZ9',
 
         'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsiZXBvcm5lciIsInZqYXYiLCJ4dmlkZW9zIiwieG54eCIsInN4eWxhbmQiLCJ5b3VwZXJ2Il0sInRiS2V5IjoiYTVlY2ZiYmQtZjQ0ZS00NzFlLTgwNDAtYmFmODFkZmM0MjgyIiwidHBkYkNhdGVnb3JpZXMiOltdLCJzdGFzaGRiQ2F0ZWdvcmllcyI6W10sImdyb3VwIjozLCJncm91cFRvdGFsIjo2fQ',
 
-        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsic3VwZXJwb3JuIiwiZnVsbHZpZGVvc3Bvcm4iLCJwb3JuaHViIiwibm90ZmFucyIsImhvcm55ZmFwIiwic2V2ZXJlcG9ybiIsImhsaW50YWlzbWlsZSIsIm1lZ2FwYWNrcyJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDAwMC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjQsImdyb3VwVG90YWwiOjZ9',
+        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsic3VwZXJwb3JuIiwiZnVsbHZpZGVvc3Bvcm4iLCJwb3JuaHViIiwibm90ZmFucyIsImhvcm55ZmFwIiwic2V2ZXJlcG9ybiIsImhsaW50YWlzbWlsZSIsIm1lZ2FwYWNrcyJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDAwMC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVlcyI6W10sImdyb3VwIjo0LCJncm91cFRvdGFsIjo2fQ',
 
-        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsic2hhcmVhbnludWRlcyIsInh4YnJpdHMiLCJoZW50YWlnYXNtIiwieG1hemEiLCJoaW5kaXh4Z2hkIiwid2VieHNlcmllcyIsIndvd3VuY3V0IiwieWVzcG9ucGxlYXNleCJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDA0MC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjUsImdyb3VwVG90YWwiOjZ9',
+        'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsic2hhcmVhbnludWRlcyIsInh4YnJpdHMiLCJoZW50YWlnYXNtIiwieG1hemEiLCJoaW5kaXh4Z2hkIiwid2VieHNlcmllcyIsIndvd3VuY3V0IiwieWVzcG9ucGxlYXNleCJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDAwMC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjUsImdyb3VwVG90YWwiOjZ9',
 
         'https://tpb-adult-addon.click/eyJtYXhSZXN1bHRzIjoyMCwibWluU2VlZGVycyI6MywicHJld2FybURlYnJpZCI6ZmFsc2UsInNlcGFyYXRlQ2F0ZWdvcmllcyI6dHJ1ZSwibWVkaWFGbG93UHJveHlVcmwiOiIiLCJtZWRpYUZsb3dBcGlQYXNzd29yZCI6IiIsImFkUmVkaXJlY3RvclVybCI6IiIsImphY2tldHRVcmwiOiIiLCJ1c2VuZXRNb2RlIjoidG9yYm94IiwidXNlbmV0SW5kZXhlciI6Im56Z2JlZWsiLCJlbmFibGVkU29ydHMiOlsicmVjZW50Il0sInNvdXJjZXMiOlsiaG90bGVhayJdLCJ0YktleSI6ImE1ZWNmYmJkLWY0NGUtNDcxZS04MDAwMC1iYWY4MWRmYzQyODIiLCJ0cGRiQ2F0ZWdvcmllcyI6W10sInN0YXNoZGJDYXRlZ29yaWVzIjpbXSwiZ3JvdXAiOjYsImdyb3VwVG90YWwiOjZ9'
     ];
@@ -45,11 +61,11 @@
 
     /*
      * IMPORTANT:
-     * Do not use Lampa.Storage here.
+     * Do NOT use one global stored URL here.
      *
-     * Each catalog received from getManifest() contains
-     * its own _base_index, so each of the 6 configurations
-     * must use its own DEFAULT_BASE[index].
+     * Every catalog received from getManifest() contains
+     * its own `_base_index`, therefore catalog #1 uses base #1,
+     * catalog #2 uses base #2, etc.
      */
     function getBase(index) {
         index = typeof index === 'number' ? index : 0;
@@ -86,15 +102,15 @@
         try {
             return JSON.parse(data);
         } catch (e) {
-            console.log(
-                '[TPB Adult] JSON parse error:',
-                e,
-                data
-            );
-
             return {};
         }
     }
+
+    /*
+     * =========================================================
+     * MANIFEST
+     * =========================================================
+     */
 
     function getManifest(callback, error) {
         var bases = DEFAULT_BASE.slice(0);
@@ -103,39 +119,35 @@
 
         bases.forEach(function (base, index) {
 
-            var manifestUrl =
-                trimSlash(base) +
-                '/manifest.json';
+            var url = trimSlash(base) + '/manifest.json';
 
             console.log(
-                '[TPB Adult] MANIFEST REQUEST #' +
-                (index + 1) +
-                ':',
-                manifestUrl
+                '[TPB Adult] MANIFEST REQUEST',
+                index + 1,
+                url
             );
 
             request(
-                manifestUrl,
-
+                url,
                 function (data) {
-                    var manifest = json(data);
 
-                    console.log(
-                        '[TPB Adult] MANIFEST OK #' +
-                        (index + 1),
-                        manifest
-                    );
+                    var manifest = json(data);
 
                     if (
                         manifest.catalogs &&
                         manifest.catalogs.length
                     ) {
-                        manifest.catalogs.forEach(
-                            function (cat) {
-                                cat._base_index = index;
-                                catalogs.push(cat);
-                            }
-                        );
+
+                        manifest.catalogs.forEach(function (cat) {
+
+                            /*
+                             * Remember which of the six TPB bases
+                             * owns this catalog.
+                             */
+                            cat._base_index = index;
+
+                            catalogs.push(cat);
+                        });
                     }
 
                     completed++;
@@ -157,14 +169,13 @@
                             catalogs: catalogs
                         });
                     }
-                },
 
+                },
                 function (err) {
 
-                    console.log(
-                        '[TPB Adult] MANIFEST ERROR #' +
-                        (index + 1),
-                        manifestUrl,
+                    console.warn(
+                        '[TPB Adult] MANIFEST ERROR',
+                        index + 1,
                         err
                     );
 
@@ -174,6 +185,7 @@
                         completed >= bases.length &&
                         !catalogs.length
                     ) {
+
                         if (error) {
                             error(
                                 'Не удалось получить manifest TPB Adult'
@@ -184,6 +196,27 @@
             );
         });
     }
+
+    /*
+     * =========================================================
+     * CATALOG URL
+     * =========================================================
+     *
+     * IMPORTANT:
+     *
+     * TPB accepts:
+     *
+     *   /catalog/type/id/skip=0.json
+     *   /catalog/type/id/skip=20.json
+     *   /catalog/type/id/skip=40.json
+     *
+     * DO NOT add:
+     *
+     *   limit=20
+     *   maxResults=20
+     *
+     * Those produce HTTP 404 on the current addon.
+     */
 
     function catalogUrl(cat, extra) {
 
@@ -202,22 +235,21 @@
 
         extra = extra || {};
 
-        Object.keys(extra).forEach(
-            function (key) {
+        Object.keys(extra).forEach(function (key) {
 
-                if (
-                    extra[key] !== undefined &&
-                    extra[key] !== null &&
-                    extra[key] !== ''
-                ) {
-                    parts.push(
-                        enc(key) +
-                        '=' +
-                        enc(extra[key])
-                    );
-                }
+            if (
+                extra[key] !== undefined &&
+                extra[key] !== null &&
+                extra[key] !== ''
+            ) {
+
+                parts.push(
+                    enc(key) +
+                    '=' +
+                    enc(extra[key])
+                );
             }
-        );
+        });
 
         if (parts.length) {
             url += '/' + parts.join('/');
@@ -225,6 +257,12 @@
 
         return url + '.json';
     }
+
+    /*
+     * =========================================================
+     * META / STREAM
+     * =========================================================
+     */
 
     function metaUrl(type, id, baseIndex) {
 
@@ -250,6 +288,12 @@
         );
     }
 
+    /*
+     * =========================================================
+     * NORMALIZE META
+     * =========================================================
+     */
+
     function normalizeMeta(
         item,
         fallbackType,
@@ -270,6 +314,7 @@
             '';
 
         return {
+
             id: String(item.id || ''),
 
             type:
@@ -279,7 +324,6 @@
 
             title: title,
             name: title,
-
             original_title: title,
             original_name: title,
 
@@ -293,33 +337,40 @@
 
             release_date:
                 item.releaseInfo ?
-                    String(item.releaseInfo).slice(0, 10) :
-                    '',
+                String(item.releaseInfo).slice(0, 10) :
+                '',
 
             first_air_date:
                 item.releaseInfo ?
-                    String(item.releaseInfo).slice(0, 10) :
-                    '',
+                String(item.releaseInfo).slice(0, 10) :
+                '',
 
             description:
-                item.description || '',
+                item.description ||
+                '',
 
             overview:
-                item.description || '',
+                item.description ||
+                '',
 
             genre:
-                item.genres || [],
+                item.genres ||
+                [],
 
             genres:
-                item.genres || [],
+                item.genres ||
+                [],
 
             imdb_id:
                 /^tt\d+$/.test(
                     String(item.id || '')
-                ) ?
-                    String(item.id) :
-                    '',
+                )
+                    ? String(item.id)
+                    : '',
 
+            /*
+             * Internal TPB information.
+             */
             tpb_addon_id:
                 String(item.id || ''),
 
@@ -329,11 +380,17 @@
                 'movie',
 
             tpb_base_index:
-                typeof baseIndex === 'number' ?
-                    baseIndex :
-                    0
+                typeof baseIndex === 'number'
+                    ? baseIndex
+                    : 0
         };
     }
+
+    /*
+     * =========================================================
+     * STREAMS
+     * =========================================================
+     */
 
     function streamLabel(s, index) {
 
@@ -351,8 +408,8 @@
             {};
 
         var size =
-            behavior.videoSize ?
-                (
+            behavior.videoSize
+                ? (
                     ' ' +
                     Math.round(
                         behavior.videoSize /
@@ -360,8 +417,8 @@
                         10
                     ) / 10 +
                     ' GB'
-                ) :
-                '';
+                )
+                : '';
 
         if (name && quality) {
             return (
@@ -400,6 +457,7 @@
         var url = getPlayableUrl(s);
 
         if (!url) {
+
             Lampa.Noty.show(
                 'TPB Adult: поток без URL'
             );
@@ -408,6 +466,7 @@
         }
 
         var entry = {
+
             url: url,
 
             title:
@@ -418,7 +477,8 @@
                 '',
 
             quality:
-                s.quality || '',
+                s.quality ||
+                '',
 
             subtitles:
                 s.subtitles ||
@@ -426,11 +486,8 @@
         };
 
         /*
-         * Do NOT call Player.playlist([entry]) here.
-         * For one stream it can reset player state/position
-         * in some Lampa builds.
+         * Do NOT call Player.playlist([entry]).
          */
-
         Lampa.Player.play(entry);
     }
 
@@ -441,20 +498,13 @@
         baseIndex
     ) {
 
-        var url =
+        request(
+
             streamUrl(
                 type,
                 id,
                 baseIndex
-            );
-
-        console.log(
-            '[TPB Adult] STREAM REQUEST:',
-            url
-        );
-
-        request(
-            url,
+            ),
 
             function (data) {
 
@@ -463,11 +513,6 @@
                 var streams =
                     result.streams ||
                     [];
-
-                console.log(
-                    '[TPB Adult] STREAM RESULT:',
-                    result
-                );
 
                 if (!streams.length) {
 
@@ -483,6 +528,7 @@
                         function (s, i) {
 
                             return {
+
                                 title:
                                     streamLabel(
                                         s,
@@ -490,6 +536,7 @@
                                     ),
 
                                 stream: s,
+
                                 movie: movie
                             };
                         }
@@ -506,21 +553,17 @@
 
                     onSelect:
                         function (item) {
+
                             playStream(
                                 item.stream,
                                 item.movie
                             );
                         }
                 });
+
             },
 
-            function (err) {
-
-                console.log(
-                    '[TPB Adult] STREAM ERROR:',
-                    url,
-                    err
-                );
+            function () {
 
                 Lampa.Noty.show(
                     'TPB Adult: ошибка получения потоков'
@@ -528,6 +571,12 @@
             }
         );
     }
+
+    /*
+     * =========================================================
+     * OPEN META
+     * =========================================================
+     */
 
     function openMeta(item) {
 
@@ -541,28 +590,22 @@
             item.id;
 
         var baseIndex =
-            typeof item.tpb_base_index === 'number' ?
-                item.tpb_base_index :
-                0;
+            typeof item.tpb_base_index === 'number'
+                ? item.tpb_base_index
+                : 0;
 
-        var url =
+        request(
+
             metaUrl(
                 type,
                 id,
                 baseIndex
-            );
-
-        console.log(
-            '[TPB Adult] META REQUEST:',
-            url
-        );
-
-        request(
-            url,
+            ),
 
             function (data) {
 
-                var result = json(data);
+                var result =
+                    json(data);
 
                 var meta =
                     result.meta ||
@@ -575,31 +618,34 @@
                         baseIndex
                     );
 
-                movie.tpb_addon_id = id;
-                movie.tpb_addon_type = type;
-                movie.tpb_base_index = baseIndex;
+                movie.tpb_addon_id =
+                    id;
+
+                movie.tpb_addon_type =
+                    type;
+
+                movie.tpb_base_index =
+                    baseIndex;
 
                 Lampa.Activity.push({
 
                     url: '',
 
-                    title: movie.title,
+                    title:
+                        movie.title,
 
                     component:
                         'tpb_adult_card',
 
-                    movie: movie,
-                    meta: meta
+                    movie:
+                        movie,
+
+                    meta:
+                        meta
                 });
             },
 
-            function (err) {
-
-                console.log(
-                    '[TPB Adult] META ERROR:',
-                    url,
-                    err
-                );
+            function () {
 
                 var movie =
                     normalizeMeta(
@@ -618,6 +664,12 @@
         );
     }
 
+    /*
+     * =========================================================
+     * TPB CARD
+     * =========================================================
+     */
+
     function TpbCard(object) {
 
         var html =
@@ -626,101 +678,49 @@
         var movie =
             object.movie || {};
 
-        var streamsLoaded = false;
+        var streamsLoaded =
+            false;
 
-        this.create = function () {
+        this.create =
+            function () {
 
-            var title =
-                movie.title ||
-                movie.name ||
-                'TPB Adult';
+                var title =
+                    movie.title ||
+                    movie.name ||
+                    'TPB Adult';
 
-            var block = $(
-                '<div style="padding:2em;">' +
+                var block = $(
 
-                    '<div style="' +
-                    'font-size:1.7em;' +
-                    'margin-bottom:.8em;' +
-                    '">' +
+                    '<div style="padding:2em;">' +
 
-                    escapeHtml(title) +
+                        '<div style="' +
+                            'font-size:1.7em;' +
+                            'margin-bottom:.8em;' +
+                        '">' +
 
-                    '</div>' +
+                            escapeHtml(
+                                title
+                            ) +
 
-                    '<div class="' +
-                    'selector simple-button" ' +
-                    'style="' +
-                    'display:inline-block;' +
-                    'padding:1em 1.4em;' +
-                    '">' +
+                        '</div>' +
 
-                    '▶ Смотреть' +
+                        '<div class="' +
+                            'selector simple-button" ' +
+                            'style="' +
+                                'display:inline-block;' +
+                                'padding:1em 1.4em;' +
+                            '">' +
 
-                    '</div>' +
+                            '▶ Смотреть' +
 
-                    '<div style="' +
-                    'margin-top:1.2em;' +
-                    'opacity:.85;' +
-                    'line-height:1.5;' +
-                    '">' +
+                        '</div>' +
 
-                    escapeHtml(
-                        movie.description || ''
-                    ) +
+                        '<div style="' +
+                            'margin-top:1.2em;' +
+                            'opacity:.85;' +
+                            'line-height:1.5;' +
+                        '">' +
 
-                    '</div>' +
-
-                '</div>'
-            );
-
-            block
-                .find('.simple-button')
-                .on(
-                    'hover:enter',
-                    function () {
-
-                        if (streamsLoaded) {
-                            return;
-                        }
-
-                        streamsLoaded = true;
-
-                        showStreams(
-                            movie,
-
-                            movie.tpb_addon_type ||
-                            movie.type,
-
-                            movie.tpb_addon_id ||
-                            movie.id,
-
-                            movie.tpb_base_index ||
-                            0
-                        );
-
-                        setTimeout(
-                            function () {
-                                streamsLoaded = false;
-                            },
-                            1000
-                        );
-                    }
-                );
-
-            html.append(block);
-
-            return html;
-        };
-
-        this.render = function () {
-            return html;
-        };
-
-        this.start = function () {
-
-            Lampa.Controller.add(
-                'content',
-                {
-
-                    toggle:
-            
+                            escapeHtml(
+                                movie.description ||
+       
